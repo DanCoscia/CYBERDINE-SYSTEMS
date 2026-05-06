@@ -490,9 +490,9 @@ full-horizon scores from competing inside one persistent GA state.
 
 The GA state also has a scoring-objective version. If the score formula
 changes, old saved genomes are ignored automatically because their scores are
-not comparable to the new objective. After the PT5/saturation update, the next
-weekly training command starts a fresh generation even if old `.mat` files are
-still present.
+not comparable to the new objective. The current KPI-aligned scoring objective
+uses `GaStateVersion = 8`, so older `.mat` training states are ignored by the
+next training command even if they are still present.
 
 The current scorer is robust across replications: it scores each stochastic DM
 replication and subtracts a penalty for high score variance. A candidate must
