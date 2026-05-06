@@ -96,15 +96,17 @@ end
 title('Machine Saturation', 'Interpreter', 'none');
 
 subplot(2, 3, 6);
-releaseTotals = localReleaseTotals(plan);
-if any(isfinite(totals)) || any(releaseTotals > 0)
-    bar(categorical(ptNames), [releaseTotals(:), totals(:)]);
-    legend({'Released', 'Produced'}, 'Location', 'best');
-    ylabel('Parts');
-else
-    localNoData(gca, 'No release/production data');
+if ~localPlotCandidateComparison(gca, campaignInfo, config)
+    releaseTotals = localReleaseTotals(plan);
+    if any(isfinite(totals)) || any(releaseTotals > 0)
+        bar(categorical(ptNames), [releaseTotals(:), totals(:)]);
+        legend({'Released', 'Produced'}, 'Location', 'best');
+        ylabel('Parts');
+    else
+        localNoData(gca, 'No release/production data');
+    end
+    title('Release vs Produced', 'Interpreter', 'none');
 end
-title('Release vs Produced', 'Interpreter', 'none');
 
 drawnow;
 end
@@ -204,6 +206,247 @@ partTypes = string(T.("Part Type"));
 numbers = double(T.Number);
 for p = 1:5
     releaseTotals(p) = sum(numbers(partTypes == "PT" + string(p)), 'omitnan');
+end
+end
+
+function plotted = localPlotCandidateComparison(ax, campaignInfo, config)
+plotted = false;
+if ~isfield(config, 'DmProductionLogFile') || ~isfile(config.DmProductionLogFile)
+    return
+end
+
+try
+    candidateSummary = readtable(config.DmProductionLogFile, ...
+        'Sheet', 'CandidateSummary', 'VariableNamingRule', 'preserve');
+    kpiAvg = readtable(config.DmProductionLogFile, ...
+        'Sheet', 'KPI_Avg', 'VariableNamingRule', 'preserve');
+catch
+    return
+end
+
+candidateSummary = localNormalizeTextColumns(candidateSummary);
+kpiAvg = localNormalizeTextColumns(kpiAvg);
+candidateBlock = localLatestCandidateBlock(candidateSummary, campaignInfo, config);
+summary = localCandidateSummaryFromLog(candidateBlock, kpiAvg);
+if isempty(summary) || height(summary) == 0
+    return
+end
+
+metricMatrix = [summary.TargetMetPct, summary.WipRel, summary.LeadRel];
+if all(~isfinite(metricMatrix(:)))
+    return
+end
+
+cla(ax);
+bars = bar(ax, metricMatrix, 'grouped');
+grid(ax, 'on');
+labels = "C" + string(summary.Candidate) + newline + ...
+    "S " + string(round(summary.NormalizedScore, 1));
+set(ax, 'XTick', 1:height(summary), 'XTickLabel', labels);
+ylabel(ax, 'Normalized metric');
+title(ax, 'Candidate Comparison', 'Interpreter', 'none');
+legendLabels = {'Target met %', 'WIP rel.', 'Lead rel.'};
+n = min(numel(bars), numel(legendLabels));
+if n > 0
+    legend(ax, bars(1:n), legendLabels(1:n), 'Location', 'best');
+end
+finiteValues = metricMatrix(isfinite(metricMatrix));
+if ~isempty(finiteValues)
+    ylim(ax, [min(0, floor(min(finiteValues) / 10) * 10), ...
+        max(100, ceil(max(finiteValues) / 10) * 10)]);
+end
+plotted = true;
+end
+
+function T = localNormalizeTextColumns(T)
+if isempty(T) || ~istable(T)
+    return
+end
+for i = 1:numel(T.Properties.VariableNames)
+    name = T.Properties.VariableNames{i};
+    if iscell(T.(name)) || isstring(T.(name)) || ischar(T.(name))
+        try
+            T.(name) = string(T.(name));
+        catch
+        end
+    end
+end
+end
+
+function block = localLatestCandidateBlock(candidateSummary, campaignInfo, config)
+block = table();
+if isempty(candidateSummary) || height(candidateSummary) == 0 || ...
+        ~ismember('Candidate', candidateSummary.Properties.VariableNames)
+    return
+end
+
+mask = true(height(candidateSummary), 1);
+mode = string(localStructValue(campaignInfo, 'CampaignMode', ""));
+if strlength(mode) > 0 && ismember('CampaignMode', candidateSummary.Properties.VariableNames)
+    modeValues = lower(string(candidateSummary.CampaignMode));
+    modeMask = modeValues == lower(mode);
+    if ~any(modeMask) && contains(lower(mode), "full-week-")
+        modeMask = modeValues == "full";
+    end
+    if any(modeMask)
+        mask = mask & modeMask;
+    end
+end
+
+if isfield(campaignInfo, 'HorizonHours') && ...
+        ismember('HorizonHours', candidateSummary.Properties.VariableNames)
+    horizon = double(campaignInfo.HorizonHours(1));
+    horizonValues = double(candidateSummary.HorizonHours);
+    horizonMask = abs(horizonValues - horizon) < 1e-9;
+    if any(horizonMask)
+        mask = mask & horizonMask;
+    end
+end
+
+if isfield(campaignInfo, 'StartTime') && ...
+        ismember('StartTime', candidateSummary.Properties.VariableNames)
+    startMask = localDatetimeMask(candidateSummary.StartTime, campaignInfo.StartTime);
+    if any(startMask)
+        mask = mask & startMask;
+    end
+end
+
+if isfield(campaignInfo, 'FinishTime') && ...
+        ismember('FinishTime', candidateSummary.Properties.VariableNames)
+    finishMask = localDatetimeMask(candidateSummary.FinishTime, campaignInfo.FinishTime);
+    if any(finishMask)
+        mask = mask & finishMask;
+    end
+end
+
+matching = candidateSummary(mask, :);
+if isempty(matching) || height(matching) == 0
+    return
+end
+if ismember('Timestamp', matching.Properties.VariableNames)
+    matching = sortrows(matching, 'Timestamp');
+end
+
+startIdx = find(double(matching.Candidate) == 1, 1, 'last');
+if isempty(startIdx)
+    candidateCount = 5;
+    if isfield(config, 'NumReleaseCandidates') && ~isempty(config.NumReleaseCandidates)
+        candidateCount = max(1, double(config.NumReleaseCandidates(1)));
+    end
+    startIdx = max(1, height(matching) - candidateCount + 1);
+end
+block = matching(startIdx:end, :);
+
+% Keep the newest row per candidate within the active batch.
+candidates = unique(double(block.Candidate), 'stable');
+rows = zeros(numel(candidates), 1);
+for i = 1:numel(candidates)
+    idx = find(double(block.Candidate) == candidates(i), 1, 'last');
+    rows(i) = idx;
+end
+block = block(sort(rows), :);
+end
+
+function mask = localDatetimeMask(values, target)
+mask = false(numel(values), 1);
+try
+    if isdatetime(values)
+        mask = abs(days(values(:) - target)) < 1e-9;
+    else
+        mask = string(values(:)) == string(target);
+    end
+catch
+end
+end
+
+function summary = localCandidateSummaryFromLog(candidateBlock, kpiAvg)
+summary = table();
+if isempty(candidateBlock) || height(candidateBlock) == 0
+    return
+end
+
+n = height(candidateBlock);
+candidate = double(candidateBlock.Candidate);
+normalizedScore = localColumnNumeric(candidateBlock, 'NormalizedScore');
+targetMetPct = nan(n, 1);
+wipProxy = nan(n, 1);
+leadHours = nan(n, 1);
+
+for i = 1:n
+    runId = "";
+    if ismember('RunId', candidateBlock.Properties.VariableNames)
+        runId = string(candidateBlock.RunId(i));
+    end
+    kpiRow = localKpiRowForRun(kpiAvg, runId);
+    produced = localNumeric(kpiRow, 'TotalProduction');
+    target = localNumeric(candidateBlock(i, :), 'CampaignTargetTotal');
+    if isfinite(produced) && isfinite(target) && target > 0
+        targetMetPct(i) = 100 * produced / target;
+    end
+    wipProxy(i) = localNumeric(kpiRow, 'WipProxy');
+    leadHours(i) = localNumeric(kpiRow, 'MeanLeadTimeHours');
+end
+
+summary = table(candidate, normalizedScore, targetMetPct, wipProxy, leadHours, ...
+    localNormalizeMetric(wipProxy), localNormalizeMetric(leadHours), ...
+    'VariableNames', {'Candidate', 'NormalizedScore', 'TargetMetPct', ...
+    'WipProxy', 'MeanLeadTimeHours', 'WipRel', 'LeadRel'});
+end
+
+function values = localColumnNumeric(T, name)
+values = nan(height(T), 1);
+name = char(name);
+if ~istable(T) || ~ismember(name, T.Properties.VariableNames)
+    return
+end
+try
+    values = double(T.(name));
+catch
+    values = str2double(string(T.(name)));
+end
+end
+
+function row = localKpiRowForRun(kpiAvg, runId)
+row = table();
+if strlength(runId) == 0 || isempty(kpiAvg) || height(kpiAvg) == 0 || ...
+        ~ismember('RunId', kpiAvg.Properties.VariableNames)
+    return
+end
+idx = find(string(kpiAvg.RunId) == runId, 1, 'last');
+if ~isempty(idx)
+    row = kpiAvg(idx, :);
+end
+end
+
+function value = localNumeric(T, name)
+value = NaN;
+name = char(name);
+if ~istable(T) || ~ismember(name, T.Properties.VariableNames)
+    return
+end
+raw = T.(name);
+if isempty(raw)
+    return
+end
+try
+    value = double(raw(1));
+catch
+    value = str2double(string(raw(1)));
+end
+end
+
+function normValues = localNormalizeMetric(values)
+normValues = values;
+finiteValues = values(isfinite(values));
+if isempty(finiteValues)
+    normValues(:) = NaN;
+    return
+end
+maxValue = max(abs(finiteValues));
+if maxValue <= 0
+    normValues(:) = 0;
+else
+    normValues = values / maxValue * 100;
 end
 end
 
