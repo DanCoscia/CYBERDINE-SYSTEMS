@@ -7,6 +7,26 @@ Tecnomatix Plant Simulation Digital Model.
 
 The real-system executor is intentionally not called by this code.
 
+## Project KPI Contract
+
+The course brief defines four mandatory KPIs. These are the main KPIs used in
+the DSS reports and in the current GA/DM scoring objective:
+
+- `WIP`: parts currently inside the system, read from `SysState.xlsx`.
+- `CumProdShift`: completed parts per shift, counted at Stage 4 exits
+  (`M11`-`M14`).
+- `SigmaCumProd<k>`: standard deviation of daily production for each
+  `PT1`-`PT5` over the campaign/week.
+- `PlanEffShift`: planned release adherence. In RS log analysis this compares
+  planned releases with parts that were effectively released/produced. In DM
+  scoring it is approximated from planned release totals versus completed
+  production, with over-release penalized because exact by-part WIP ownership
+  is not exported by the DM runner.
+
+The optional KPI families are also extracted or scored when available:
+`AvLeadTime`, `InterDepTime`, `InterDepTimeS4`, `Throughput<k>`, and
+`SaturationM<m>`.
+
 ## Current Important Findings
 
 - **Do not use `DSS_Output\DM_Work` for trusted GA scoring.** The copied
@@ -860,8 +880,10 @@ so Matlab calls look like `cpms.runShift(...)`.
   update the live KPI dashboard. It is useful for diagnostics, but trusted GA
   scoring uses the official p-coded course `dm_run` path by default.
 - `+cpms/extractDmScore.m`: converts Digital Model outputs into one scalar
-  score. It rewards production/target attainment and penalizes WIP, lead time,
-  imbalance, or weak throughput according to the current scoring weights.
+  score. It is aligned to the course KPI contract: it rewards target
+  attainment, throughput, PT5 priority, and plan efficiency, while penalizing
+  WIP, excess planned release, lead time, daily production variability,
+  imbalance, and high machine saturation.
 
 ### Writing outputs and safety
 

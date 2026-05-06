@@ -42,6 +42,15 @@ elseif isfield(config, 'TargetByPart') && istable(config.TargetByPart)
         targets(i) = config.TargetByPart.TargetQty(i) / 10;
     end
 end
+targets(~isfinite(targets) | targets < 0) = 0;
+
+plannedRelease = nan(1, 5);
+if isfield(config, 'ScorePlannedReleaseByPart') && ...
+        isnumeric(config.ScorePlannedReleaseByPart) && ...
+        numel(config.ScorePlannedReleaseByPart) >= 5
+    plannedRelease = double(config.ScorePlannedReleaseByPart(1:5));
+    plannedRelease(~isfinite(plannedRelease) | plannedRelease < 0) = 0;
+end
 
 throughput = zeros(numel(runs), 5);
 wip = nan(numel(runs), 1);
@@ -84,7 +93,7 @@ partWeights = localPartWeights(config);
 aggregateScore = localMetricScore(meanThroughput, localNanMean(wip), ...
     localNanMean(lead), localNanMean(sigma), localNanMean(satSpread), ...
     localNanMean(satMean), localNanMean(satOver), localNanMean(satHardOver), ...
-    targets, partWeights, config);
+    targets, partWeights, plannedRelease, config);
 
 score = aggregateScore;
 if localConfigLogical(config, 'ScoreUseRobustReplicateScore', true)
@@ -92,7 +101,7 @@ if localConfigLogical(config, 'ScoreUseRobustReplicateScore', true)
     for r = 1:numel(runs)
         replicateScores(r) = localMetricScore(throughput(r, :), wip(r), ...
             lead(r), sigma(r), satSpread(r), satMean(r), satOver(r), ...
-            satHardOver(r), targets, partWeights, config);
+            satHardOver(r), targets, partWeights, plannedRelease, config);
     end
     if any(isfinite(replicateScores))
         robustScore = localNanMean(replicateScores) - ...
@@ -105,7 +114,7 @@ end
 end
 
 function score = localMetricScore(production, wip, lead, sigma, satSpread, ...
-    satMean, satOver, satHardOver, targets, partWeights, config)
+    satMean, satOver, satHardOver, targets, partWeights, plannedRelease, config)
 production = double(production(:))';
 if numel(production) < 5
     production(end + 1:5) = 0;
@@ -113,20 +122,77 @@ end
 production = production(1:5);
 production(~isfinite(production)) = 0;
 
+targets = double(targets(:))';
+if numel(targets) < 5
+    targets(end + 1:5) = 0;
+end
+targets = targets(1:5);
+targets(~isfinite(targets) | targets < 0) = 0;
+
+plannedRelease = double(plannedRelease(:))';
+if numel(plannedRelease) < 5
+    plannedRelease(end + 1:5) = NaN;
+end
+plannedRelease = plannedRelease(1:5);
+plannedRelease(~isfinite(plannedRelease) | plannedRelease < 0) = NaN;
+
 shortfallByPart = max(0, targets - production);
 weightedShortfall = sum(partWeights .* shortfallByPart);
 priorityReward = sum((partWeights - 1) .* min(production, targets));
 totalThroughput = sum(production, 'omitnan');
 imbalance = std(production, 0, 'omitnan');
 
+targetMask = targets > 0;
+targetPct = zeros(1, 5);
+targetPct(targetMask) = production(targetMask) ./ targets(targetMask);
+totalTarget = sum(targets, 'omitnan');
+if totalTarget > 0
+    totalTargetPct = totalThroughput / totalTarget;
+else
+    totalTargetPct = 0;
+end
+
+minTotalTargetPct = localConfigNumber(config, 'ScoreMinTotalTargetPct', 0.85);
+minPartTargetPct = localConfigNumber(config, 'ScoreMinPartTargetPct', 0.72);
+minPT5TargetPct = localConfigNumber(config, 'ScoreMinPT5TargetPct', 0.85);
+totalTargetPenalty = max(0, minTotalTargetPct - totalTargetPct);
+partTargetPenalty = sum(partWeights(targetMask) .* ...
+    max(0, minPartTargetPct - targetPct(targetMask)), 'omitnan');
+pt5TargetPenalty = 0;
+if targets(5) > 0
+    pt5TargetPenalty = max(0, minPT5TargetPct - targetPct(5));
+end
+
+planEff = 0;
+planEffShortfall = 0;
+excessRelease = 0;
+plannedMask = isfinite(plannedRelease) & plannedRelease > 0;
+if any(plannedMask)
+    planEffByPart = min(production(plannedMask), plannedRelease(plannedMask)) ./ ...
+        plannedRelease(plannedMask);
+    planEff = mean(planEffByPart, 'omitnan');
+    planEffShortfall = max(0, 1 - planEff);
+    excessRelease = sum(max(0, plannedRelease(plannedMask) - production(plannedMask)), 'omitnan');
+end
+
+wipOverTarget = max(0, localFiniteOrZero(wip) - ...
+    localConfigNumber(config, 'WipTarget', 150));
+
 score = ...
     12.0 * totalThroughput ...
   + 6.0  * priorityReward ...
+  + localConfigNumber(config, 'ScorePlanEffWeight', 250.0) * planEff ...
   - 55.0 * weightedShortfall ...
   - 0.35 * localFiniteOrZero(wip) ...
+  - localConfigNumber(config, 'ScoreWipOverTargetWeight', 2.0) * wipOverTarget ...
   - 2.0  * localFiniteOrZero(lead) ...
   - 1.5  * localFiniteOrZero(sigma) ...
   - 15.0 * imbalance ...
+  - localConfigNumber(config, 'ScorePlanEffShortfallWeight', 550.0) * planEffShortfall ...
+  - localConfigNumber(config, 'ScoreExcessReleaseWeight', 1.0) * excessRelease ...
+  - localConfigNumber(config, 'ScoreTotalTargetShortfallWeight', 900.0) * totalTargetPenalty ...
+  - localConfigNumber(config, 'ScorePartTargetShortfallWeight', 350.0) * partTargetPenalty ...
+  - localConfigNumber(config, 'ScorePT5TargetShortfallWeight', 900.0) * pt5TargetPenalty ...
   - localConfigNumber(config, 'ScoreSaturationSpreadWeight', 20.0) * localFiniteOrZero(satSpread) ...
   - localConfigNumber(config, 'ScoreMeanSaturationWeight', 35.0) * localFiniteOrZero(satMean) ...
   - localConfigNumber(config, 'ScoreHighSaturationWeight', 450.0) * localFiniteOrZero(satOver) ...

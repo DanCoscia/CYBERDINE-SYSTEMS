@@ -94,8 +94,8 @@ for i = 1:numel(plans)
             [dmResult, seeds, liveLog] = localRunDigitalModelOnce(finishString, config, campaignInfo, useLiveRunner); %#ok<ASGLU>
         end
 
-        scoreConfig = config;
-        scoreConfig.ScoreTargetByPart = campaignInfo.CampaignTarget;
+        scoreConfig = localScoreConfigForPlan(config, campaignInfo.CampaignTarget, ...
+            plans(i).ReleaseTable);
         scores.Score(i) = cpms.extractDmScore(dmResult, scoreConfig);
         scores.SimulatedShifts(i) = localSimulatedShiftCount(dmResult, campaignInfo);
         scores.NormalizedScore(i) = scores.Score(i) / max(1, scores.SimulatedShifts(i));
@@ -269,8 +269,8 @@ try
             finishString, config, campaignInfo, useLiveRunner); %#ok<ASGLU>
     end
 
-    scoreConfig = config;
-    scoreConfig.ScoreTargetByPart = campaignInfo.CampaignTarget;
+    scoreConfig = localScoreConfigForPlan(config, campaignInfo.CampaignTarget, ...
+        plan.ReleaseTable);
     scores.Score(1) = cpms.extractDmScore(dmResult, scoreConfig);
     scores.SimulatedShifts(1) = localSimulatedShiftCount(dmResult, campaignInfo);
     scores.NormalizedScore(1) = scores.Score(1) / max(1, scores.SimulatedShifts(1));
@@ -401,6 +401,14 @@ catch dashboardError
 end
 end
 
+function scoreConfig = localScoreConfigForPlan(config, campaignTarget, releaseTable)
+scoreConfig = config;
+scoreConfig.ScoreTargetByPart = campaignTarget;
+[plannedByPart, plannedTotal] = localReleaseTotals(releaseTable);
+scoreConfig.ScorePlannedReleaseByPart = plannedByPart;
+scoreConfig.ScorePlannedReleaseTotal = plannedTotal;
+end
+
 function localPlotWeeklyOfficialDmDashboardIfNeeded(weekResult, releaseWindow, plan, weekIndex, weekInfo, config, useLiveRunner)
 if useLiveRunner
     return
@@ -411,8 +419,7 @@ end
 
 weekPlan = plan;
 weekPlan.ReleaseTable = releaseWindow;
-scoreConfig = config;
-scoreConfig.ScoreTargetByPart = weekInfo.CampaignTarget;
+scoreConfig = localScoreConfigForPlan(config, weekInfo.CampaignTarget, releaseWindow);
 weekScore = cpms.extractDmScore(weekResult, scoreConfig);
 weekShifts = localSimulatedShiftCount(weekResult, weekInfo);
 weekNormalizedScore = weekScore / max(1, weekShifts);
