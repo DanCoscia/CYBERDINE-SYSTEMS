@@ -506,6 +506,12 @@ comparisons are not dominated by one plan getting an easy random week while
 another gets a hard random week. The seed used for each replication is logged
 in `KPI_Runs`.
 
+GA candidate generation uses a separate random seed from the Digital Model.
+This matters because the official `dm_run.p` path resets Matlab's RNG to keep
+candidate simulations fair. The DSS reseeds the GA before building the next
+population and rejects duplicate genomes, so repeated training calls do not
+burn Tecnomatix time on the same candidate set.
+
 Useful smoke test:
 
 ```matlab

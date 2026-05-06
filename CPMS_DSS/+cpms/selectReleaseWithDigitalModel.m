@@ -1074,6 +1074,7 @@ routingTable = addvars(routingTable, partTypes, 'Before', 1, 'NewVariableNames',
 end
 
 function population = localNextPopulation(trainingState, baseGenome, config)
+localSeedGaGenerator(trainingState, config);
 popSize = max(config.GaPopulationSize, config.NumReleaseCandidates);
 dim = numel(baseGenome);
 population = zeros(popSize, dim);
@@ -1111,10 +1112,22 @@ if isfield(trainingState, 'Population') && isfield(trainingState, 'Scores') && .
 end
 
 while writeIdx <= popSize
-    if rand < config.GaRandomImmigrantFraction
-        child = localRandomGenome(baseGenome, config);
-    else
-        child = localMutateGenome(anchor, config);
+    maxAttempts = localConfigNumber(config, 'GaDuplicateRetryLimit', 100);
+    child = [];
+    for attempt = 1:maxAttempts
+        if rand < config.GaRandomImmigrantFraction
+            candidateChild = localRandomGenome(baseGenome, config);
+        else
+            candidateChild = localMutateGenome(anchor, config);
+        end
+        candidateChild = localRepairGenome(candidateChild, config);
+        if ~localGenomeAlreadyQueued(population, writeIdx - 1, candidateChild)
+            child = candidateChild;
+            break
+        end
+    end
+    if isempty(child)
+        child = localDistinctFallbackGenome(anchor, baseGenome, population, writeIdx - 1, config);
     end
     population(writeIdx, :) = child;
     writeIdx = writeIdx + 1;
@@ -1125,6 +1138,21 @@ for i = 1:size(population, 1)
 end
 end
 
+function localSeedGaGenerator(trainingState, config)
+if isfield(config, 'GaRandomSeed') && ~isempty(config.GaRandomSeed)
+    seed = round(double(config.GaRandomSeed(1))) + ...
+        104729 * max(0, localStructValue(trainingState, 'Generation', 0));
+else
+    seed = round(1000 * posixtime(datetime('now'))) + ...
+        104729 * max(0, localStructValue(trainingState, 'Generation', 0));
+end
+seed = mod(round(seed), 2^32 - 1);
+if seed <= 0
+    seed = 1;
+end
+rng(seed, 'twister');
+end
+
 function tf = localGenomeAlreadyQueued(population, lastRow, genome)
 tf = false;
 if lastRow <= 0
@@ -1132,6 +1160,20 @@ if lastRow <= 0
 end
 existing = population(1:lastRow, :);
 tf = any(all(abs(existing - double(genome(:))') < 1e-9, 2));
+end
+
+function genome = localDistinctFallbackGenome(anchor, baseGenome, population, lastRow, config)
+genome = localRandomGenome(baseGenome, config);
+for attempt = 1:100
+    if ~localGenomeAlreadyQueued(population, lastRow, genome)
+        return
+    end
+    genome = localMutateGenome(anchor, config);
+    releaseJitter = max(1, attempt);
+    genome(1:5) = genome(1:5) + round(releaseJitter * randn(1, 5));
+    genome(6:end) = genome(6:end) + releaseJitter * 0.1 * randn(1, 14);
+    genome = localRepairGenome(genome, config);
+end
 end
 
 function trainingState = localUpdateTrainingState(trainingState, plans, scores, config)
