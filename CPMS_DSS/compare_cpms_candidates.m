@@ -184,11 +184,29 @@ sameHorizon = abs(double(T.HorizonHours) - double(latestRow.HorizonHours)) < 1e-
 sameStart = T.StartTime == latestRow.StartTime;
 sameFinish = T.FinishTime == latestRow.FinishTime;
 
-% A full-horizon candidate can take many minutes. Keep the latest compatible
-% block broad enough to include those rows, but narrow enough to avoid older
-% training sessions from previous days.
-recent = T.Timestamp >= latestRow.Timestamp - hours(3);
-T = T(sameCampaign & sameSource & sameHorizon & sameStart & sameFinish & recent, :);
+T = sortrows(T(sameCampaign & sameSource & sameHorizon & sameStart & sameFinish, :), ...
+    'Timestamp');
+if isempty(T) || height(T) == 0
+    return
+end
+
+% A candidate batch is written sequentially as C1, C2, ... Cn. The latest
+% batch starts at the last C1 before the newest row; this avoids mixing
+% several generations from the same afternoon into one comparison.
+lastCandidateOne = find(double(T.Candidate) == 1, 1, 'last');
+if isempty(lastCandidateOne)
+    return
+end
+T = T(lastCandidateOne:end, :);
+
+% If a run was interrupted and restarted, keep only the newest row for each
+% candidate within this active batch.
+candidates = unique(double(T.Candidate), 'stable');
+rows = zeros(numel(candidates), 1);
+for i = 1:numel(candidates)
+    rows(i) = find(double(T.Candidate) == candidates(i), 1, 'last');
+end
+T = T(sort(rows), :);
 end
 
 function T = localUniqueCandidates(T)
