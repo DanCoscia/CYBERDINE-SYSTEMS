@@ -1273,21 +1273,31 @@ try
         candidateIndex, score, normalizedScore, campaignInfo);
     liveRows = localLiveRows(liveLog, runId, timestamp);
 
-    localAppendSheet(config.DmProductionLogFile, 'ThPerShift_Runs', shiftRuns);
-    localAppendSheet(config.DmProductionLogFile, 'DailyCumProd_Runs', dailyRuns);
-    localAppendSheet(config.DmProductionLogFile, 'CumulativeProd_Runs', cumulativeRuns);
-    localAppendSheet(config.DmProductionLogFile, 'ThPerShift_Avg', shiftAvg);
-    localAppendSheet(config.DmProductionLogFile, 'DailyCumProd_Avg', dailyAvg);
-    localAppendSheet(config.DmProductionLogFile, 'CumulativeProd_Avg', cumulativeAvg);
-    localAppendSheet(config.DmProductionLogFile, 'KPI_Runs', kpiRuns);
-    localAppendSheet(config.DmProductionLogFile, 'KPI_Avg', kpiAvg);
-    localAppendSheet(config.DmProductionLogFile, 'CandidateSummary', candidateSummary);
-    localAppendSheet(config.DmProductionLogFile, 'LivePolls', liveRows);
-    localAppendSheet(config.DmProductionLogFile, 'ReleasePlan', releasePlan);
-    localAppendSheet(config.DmProductionLogFile, 'RoutingPlan', routingPlan);
+    localAppendSheetSafe(config.DmProductionLogFile, 'CandidateSummary', candidateSummary);
+    localAppendSheetSafe(config.DmProductionLogFile, 'KPI_Avg', kpiAvg);
+    localAppendSheetSafe(config.DmProductionLogFile, 'KPI_Runs', kpiRuns);
+    localAppendSheetSafe(config.DmProductionLogFile, 'ThPerShift_Runs', shiftRuns);
+    localAppendSheetSafe(config.DmProductionLogFile, 'DailyCumProd_Runs', dailyRuns);
+    localAppendSheetSafe(config.DmProductionLogFile, 'CumulativeProd_Runs', cumulativeRuns);
+    localAppendSheetSafe(config.DmProductionLogFile, 'ThPerShift_Avg', shiftAvg);
+    localAppendSheetSafe(config.DmProductionLogFile, 'DailyCumProd_Avg', dailyAvg);
+    localAppendSheetSafe(config.DmProductionLogFile, 'CumulativeProd_Avg', cumulativeAvg);
+    localAppendSheetSafe(config.DmProductionLogFile, 'LivePolls', liveRows);
+    localAppendSheetSafe(config.DmProductionLogFile, 'ReleasePlan', releasePlan);
+    localAppendSheetSafe(config.DmProductionLogFile, 'RoutingPlan', routingPlan);
 catch logError
     warning('cpms:DmProductionLogFailed', ...
         'Could not write DM production log: %s', logError.message);
+end
+end
+
+function localAppendSheetSafe(filePath, sheetName, newRows)
+try
+    localAppendSheet(filePath, sheetName, newRows);
+catch sheetError
+    warning('cpms:DmProductionLogSheetFailed', ...
+        'Could not write DM production log sheet %s: %s', ...
+        sheetName, sheetError.message);
 end
 end
 
