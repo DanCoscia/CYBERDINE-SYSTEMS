@@ -1111,6 +1111,18 @@ if isfield(trainingState, 'Population') && isfield(trainingState, 'Scores') && .
     end
 end
 
+localNeighbors = localNeighborhoodGenomes(anchor, config);
+for i = 1:size(localNeighbors, 1)
+    if writeIdx > evalSize
+        break
+    end
+    candidate = localNeighbors(i, :);
+    if ~localGenomeAlreadyQueued(population, writeIdx - 1, candidate)
+        population(writeIdx, :) = candidate;
+        writeIdx = writeIdx + 1;
+    end
+end
+
 while writeIdx <= popSize
     maxAttempts = localConfigNumber(config, 'GaDuplicateRetryLimit', 100);
     child = [];
@@ -1136,6 +1148,55 @@ end
 for i = 1:size(population, 1)
     population(i, :) = localRepairGenome(population(i, :), config);
 end
+end
+
+function neighbors = localNeighborhoodGenomes(anchor, config)
+anchor = localRepairGenome(anchor, config);
+releaseStep = max(1, round(localConfigNumber(config, 'GaLocalReleaseStep', 4)));
+routingStep = max(0.1, localConfigNumber(config, 'GaLocalRoutingStep', 4));
+maxNeighbors = max(0, round(localConfigNumber(config, 'GaLocalNeighborCount', 4)));
+
+candidates = zeros(0, numel(anchor));
+
+% Small release changes around the current champion. These explore the
+% WIP/target tradeoff without jumping into obviously overloaded schedules.
+candidate = anchor;
+candidate(5) = candidate(5) + releaseStep;
+candidate(1) = candidate(1) - releaseStep;
+candidates(end + 1, :) = localRepairGenome(candidate, config);
+
+candidate = anchor;
+candidate(5) = candidate(5) + releaseStep;
+candidate(3) = candidate(3) - releaseStep;
+candidates(end + 1, :) = localRepairGenome(candidate, config);
+
+candidate = anchor;
+candidate(1:5) = candidate(1:5) - [1 1 1 1 0] * releaseStep;
+candidates(end + 1, :) = localRepairGenome(candidate, config);
+
+candidate = anchor;
+candidate(1:5) = candidate(1:5) + [0 0 0 0 1] * releaseStep;
+candidates(end + 1, :) = localRepairGenome(candidate, config);
+
+% Small routing changes around the champion. The route table is repaired by
+% normalization later, so these are local pressure shifts rather than invalid
+% routing percentages.
+if numel(anchor) >= 19
+    candidate = anchor;
+    candidate(6:8) = candidate(6:8) + routingStep * [1 -0.5 -0.5];
+    candidate(16:19) = candidate(16:19) + routingStep * [-0.5 1 -0.5 0];
+    candidates(end + 1, :) = localRepairGenome(candidate, config);
+
+    candidate = anchor;
+    candidate(9:12) = candidate(9:12) + routingStep * [1 -0.5 1 -0.5];
+    candidate(16:19) = candidate(16:19) + routingStep * [1 -0.5 -0.5 0];
+    candidates(end + 1, :) = localRepairGenome(candidate, config);
+end
+
+if maxNeighbors > 0 && size(candidates, 1) > maxNeighbors
+    candidates = candidates(1:maxNeighbors, :);
+end
+neighbors = candidates;
 end
 
 function localSeedGaGenerator(trainingState, config)
